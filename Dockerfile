@@ -30,6 +30,13 @@ COPY --from=client-builder /app/client/dist ./client/dist
 
 RUN mkdir -p /app/data /app/game
 
+# 内置默认游戏（8款僵尸危机系列）
+COPY game/ ./game_default/
+
+# 启动脚本：首次运行自动填充默认游戏
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 LABEL org.opencontainers.image.title="Flash Games"
 LABEL org.opencontainers.image.description="基于 Vue3 + Ruffle 的 Flash 游戏站点，支持数万款 SWF 游戏在线游玩"
 LABEL org.opencontainers.image.source="https://github.com/onRoadLookBeauty/vue-flash"
@@ -45,4 +52,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD curl -f http://localhost:3000/api/categories || exit 1
 
-CMD ["node", "server/src/index.js"]
+ENTRYPOINT ["/app/entrypoint.sh"]
