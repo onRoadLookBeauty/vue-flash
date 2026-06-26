@@ -1,0 +1,11 @@
+node_modules/
+dist/
+data/
+game/
+.env
+*.swf
+.DS_Store
+Thumbs.db
+# ruffle 文件由 postinstall 自动生成，不提交
+client/public/ruffle/
+package-lock.json
