@@ -4,10 +4,11 @@
 FROM node:22-alpine AS client-builder
 WORKDIR /app/client
 COPY client/package*.json ./
-# postinstall 脚本自动复制 ruffle 文件到 public/ruffle/
-RUN npm ci
+# --ignore-scripts：此时 scripts/ 还没复制，postinstall 无法执行
+RUN npm ci --ignore-scripts
 COPY client/ ./
-RUN npm run build
+# 手动执行 postinstall（复制 ruffle 文件），然后构建
+RUN node scripts/copy-ruffle.js && npm run build
 
 # Stage 2: 构建后端（只装生产依赖，sql.js 是纯 JS 无需编译）
 FROM node:22-alpine AS server-builder
