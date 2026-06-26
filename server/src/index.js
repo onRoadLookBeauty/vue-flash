@@ -1,5 +1,7 @@
 import express from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
@@ -20,9 +22,55 @@ const GAME_DIR = process.env.GAME_DIR || path.resolve(__dirname, '..', '..', 'ga
 // 全局游戏统计
 let gameTotal = 0
 
-// ============ 中间件 ============
-app.use(cors())
-app.use(express.json())
+// ============ 安全中间件 ============
+
+// Helmet：安全响应头（防 XSS、点击劫持、MIME 嗅探等）
+app.use(helmet({
+  contentSecurityPolicy: false, // CSP 由前端 Vite 处理，避免冲突
+  crossOriginEmbedderPolicy: false,
+}))
+
+// CORS：允许常见来源（本地开发 + 局域网 + 反向代理）
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
+  : true // 默认允许所有（Docker 部署时通过反向代理控制）
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+  maxAge: 86400,
+}))
+
+// 请求体大小限制（防大包 DOS）
+app.use(express.json({ limit: '1mb' }))
+app.use(express.urlencoded({ extended: false, limit: '1mb' }))
+
+// 全局限流：每个 IP 每分钟最多 600 次请求
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '请求过于频繁，请稍后再试' },
+})
+app.use(globalLimiter)
+
+// 登录/解锁接口限流：每分钟最多 10 次（防暴力破解）
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '尝试次数过多，请1分钟后再试' },
+})
+
+// 管理接口限流：每分钟最多 100 次
+const adminLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '操作过于频繁，请稍后再试' },
+})
 
 // 请求日志
 app.use((req, res, next) => {
@@ -52,8 +100,8 @@ if (fs.existsSync(clientDist)) {
 // 游戏查询 API（公网暴露）
 app.use('/api/games', gamesRouter)
 
-// 安装引导
-app.use('/api/setup', setupRouter)
+// 安装引导（限流 + 防止重复安装）
+app.use('/api/setup', authLimiter, setupRouter)
 
 // 公开：获取前端锁状态
 app.get('/api/settings/lock', (req, res) => {
@@ -61,8 +109,8 @@ app.get('/api/settings/lock', (req, res) => {
   res.json({ lockEnabled })
 })
 
-// 公开：前端锁密码验证
-app.post('/api/unlock', async (req, res) => {
+// 公开：前端锁密码验证（限流防爆破）
+app.post('/api/unlock', authLimiter, async (req, res) => {
   try {
     const { password } = req.body
     if (!password) return res.status(400).json({ error: '请输入密码' })
@@ -102,8 +150,8 @@ app.get('/api/stats', (req, res) => {
   res.json({ total: gameTotal, categories: catMap })
 })
 
-// 管理 API（内网）
-app.use('/api/admin', adminRouter)
+// 管理 API（JWT 鉴权 + 接口限流）
+app.use('/api/admin', adminLimiter, adminRouter)
 
 // ============ SPA fallback ============
 if (fs.existsSync(clientDist)) {

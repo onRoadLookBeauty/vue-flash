@@ -1,32 +1,12 @@
 services:
   flash-games:
-    build: .
+    image: lookfuna666/flash-games:latest
     container_name: flash-games
     ports:
-      # 公网端口（前端页面 + 游戏查询 API）
       - "3000:3000"
-      # 管理端口不暴露公网（仅绑定 127.0.0.1，内网访问）
-      # 如需内网其他设备访问管理后台，取消注释下面这行并设置防火墙规则
-      # - "127.0.0.1:3001:3001"
     volumes:
       # SWF 游戏文件目录（放 .swf 文件，自动扫描入库）
       - ./game:/app/game
       # SQLite 数据库持久化
       - ./data:/app/data
-    environment:
-      # 如需运行管理端口（与 API 分离），设置 ADMIN_PORT=3001
-      # - ADMIN_PORT=3001
     restart: unless-stopped
-
-  # 可选：独立管理端口服务
-  # flash-admin:
-  #   build: .
-  #   container_name: flash-admin
-  #   ports:
-  #     - "127.0.0.1:3001:3000"
-  #   volumes:
-  #     - ./game:/app/game
-  #     - ./data:/app/data
-  #   environment:
-  #     - PORT=3001
-  #   restart: unless-stopped
