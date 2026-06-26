@@ -24,13 +24,10 @@ cd client && npm install
 # 2. 安装后端依赖
 cd ../server && npm install
 
-# 3. 创建游戏目录
-mkdir -p ../game
-
-# 4. 启动后端 (http://localhost:3000)
+# 3. 启动后端 (http://localhost:3000)
 cd server && npm run dev
 
-# 5. 新终端，启动前端 (http://localhost:5173)
+# 4. 新终端，启动前端 (http://localhost:5173)
 cd client && npm run dev
 ```
 
