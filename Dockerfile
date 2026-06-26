@@ -13,7 +13,7 @@ RUN npm run build
 FROM node:22-alpine AS server-builder
 WORKDIR /app/server
 COPY server/package*.json ./
-RUN npm ci --production
+RUN npm ci --omit=dev
 
 # Stage 3: 运行镜像
 FROM node:22-alpine
