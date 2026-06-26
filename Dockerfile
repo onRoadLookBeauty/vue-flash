@@ -36,7 +36,7 @@ RUN mkdir -p /app/data /app/game
 # 元数据标签（Docker Hub 页面展示用）
 LABEL org.opencontainers.image.title="Flash Games"
 LABEL org.opencontainers.image.description="基于 Vue3 + Ruffle 的 Flash 游戏站点，支持数万款 SWF 游戏在线游玩"
-LABEL org.opencontainers.image.source="https://github.com/你的用户名/my-flash"
+LABEL org.opencontainers.image.source="https://github.com/onRoadLookBeauty/vue-flash"
 LABEL org.opencontainers.image.licenses="MIT"
 
 ENV PORT=3000
