@@ -34,10 +34,10 @@ jobs:
         with:
           images: ${{ secrets.DOCKER_USERNAME }}/flash-games
           tags: |
-            # v1.2.3 → 1.2.3
-            type=semver,pattern={{version}}
-            # v1.2.3 → 1.2
-            type=semver,pattern={{major}}.{{minor}}
+            # v1.2.3 → 1.2.3（仅在推送 tag 时生成）
+            type=semver,pattern={{version}},enable=${{ github.ref_type == 'tag' }}
+            # v1.2.3 → 1.2（仅在推送 tag 时生成）
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.ref_type == 'tag' }}
             # latest 标签
             type=raw,value=latest,enable=${{ github.event_name == 'push' || github.event.inputs.push_latest == 'true' }}
 
