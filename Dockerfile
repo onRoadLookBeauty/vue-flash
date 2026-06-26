@@ -32,7 +32,6 @@ RUN mkdir -p /app/data /app/game
 ENV PORT=3000
 ENV GAME_DIR=/app/game
 ENV DB_PATH=/app/data/flash.db
-ENV ADMIN_PASSWORD=flash2024
 
 EXPOSE 3000
 

@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
+import { apiGetLockStatus, apiUnlock } from '@/api'
 
 const SETTINGS_KEY = 'flash_settings'
 const LOCK_KEY = 'flash_lock'
-const DEFAULT_PASSWORD = 'flash2024'
 
 export const useSettingsStore = defineStore('settings', () => {
   // ========== 界面设置 ==========
@@ -13,9 +13,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const quality = ref(loadSetting('quality', 'high'))
   const preferredRenderer = ref(loadSetting('preferredRenderer', 'wgpu-webgl'))
 
-  // ========== 前端锁 ==========
-  const lockEnabled = ref(loadSetting('lockEnabled', true))
-  const lockPassword = ref(loadSetting('lockPassword', DEFAULT_PASSWORD))
+  // ========== 前端锁（配置来自服务端） ==========
+  const lockEnabled = ref(false)       // 服务端控制开关
+  const lockChecked = ref(false)       // 是否已从服务端获取锁状态
   const unlocked = ref(false)
 
   function loadSetting(key, defaultValue) {
@@ -36,26 +36,47 @@ export const useSettingsStore = defineStore('settings', () => {
       scale: scale.value,
       quality: quality.value,
       preferredRenderer: preferredRenderer.value,
-      lockEnabled: lockEnabled.value,
-      lockPassword: lockPassword.value,
     }
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(obj))
   }
 
   // 监听变化自动保存
-  watch([theme, autoplay, scale, quality, preferredRenderer, lockEnabled, lockPassword], saveSettings, { deep: true })
+  watch([theme, autoplay, scale, quality, preferredRenderer], saveSettings, { deep: true })
 
-  // ========== 锁相关方法 ==========
-  function tryUnlock(password) {
-    if (password === lockPassword.value) {
+  // ========== 从服务端获取锁状态 ==========
+  async function fetchLockStatus() {
+    try {
+      const res = await apiGetLockStatus()
+      lockEnabled.value = res.data.lockEnabled
+      lockChecked.value = true
+      // 如果没有开启锁，直接解锁
+      if (!lockEnabled.value) {
+        unlocked.value = true
+      }
+    } catch {
+      // 服务端不可用时默认解锁
+      lockChecked.value = true
       unlocked.value = true
-      localStorage.setItem(LOCK_KEY, '1')
-      return true
     }
-    return false
   }
 
-  function checkUnlocked() {
+  // ========== 解锁验证（调用服务端） ==========
+  async function tryUnlock(password) {
+    try {
+      const res = await apiUnlock(password)
+      if (res.data.success) {
+        unlocked.value = true
+        localStorage.setItem(LOCK_KEY, '1')
+        return true
+      }
+      return false
+    } catch {
+      return false
+    }
+  }
+
+  // ========== 检查本地解锁状态 ==========
+  function checkLocalUnlock() {
     if (!lockEnabled.value) {
       unlocked.value = true
       return true
@@ -74,7 +95,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   return {
     theme, autoplay, scale, quality, preferredRenderer,
-    lockEnabled, lockPassword, unlocked,
-    tryUnlock, checkUnlocked, lock, saveSettings,
+    lockEnabled, lockChecked, unlocked,
+    fetchLockStatus, tryUnlock, checkLocalUnlock, lock, saveSettings,
   }
 })

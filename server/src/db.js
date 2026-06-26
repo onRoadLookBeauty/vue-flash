@@ -65,6 +65,26 @@ export async function initDb() {
     )
   `)
 
+  // 用户表（管理员账号）
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      username      TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role          TEXT DEFAULT 'admin',
+      created_at    TEXT DEFAULT (datetime('now','localtime')),
+      updated_at    TEXT DEFAULT (datetime('now','localtime'))
+    )
+  `)
+
+  // 系统设置表（前端锁配置、JWT密钥、首次安装标记等）
+  db.run(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `)
+
   // 索引
   db.run('CREATE INDEX IF NOT EXISTS idx_games_name ON games(name)')
   db.run('CREATE INDEX IF NOT EXISTS idx_games_category ON games(category)')
@@ -73,6 +93,36 @@ export async function initDb() {
 
   saveDb()
   return db
+}
+
+/**
+ * 检查是否已完成首次安装（是否存在管理员用户）
+ */
+export function isSetupComplete() {
+  if (!db) return false
+  const row = db.exec("SELECT COUNT(*) as cnt FROM users")
+  if (row.length === 0) return false
+  const cnt = row[0]?.values?.[0]?.[0] || 0
+  return cnt > 0
+}
+
+/**
+ * 获取设置值
+ */
+export function getSetting(key) {
+  if (!db) return null
+  const row = db.exec("SELECT value FROM settings WHERE key = ?", [key])
+  if (row.length === 0 || row[0].values.length === 0) return null
+  return row[0].values[0][0] || null
+}
+
+/**
+ * 设置/更新设置值
+ */
+export function setSetting(key, value) {
+  if (!db) return
+  db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", [key, value])
+  saveDb()
 }
 
 /**
@@ -132,4 +182,4 @@ export function getDb() {
   return db
 }
 
-export default { initDb, saveDb, queryAll, queryOne, execute, getDb }
+export default { initDb, saveDb, queryAll, queryOne, execute, getDb, isSetupComplete, getSetting, setSetting }

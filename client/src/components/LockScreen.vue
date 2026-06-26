@@ -22,24 +22,24 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useSettingsStore } from '@/stores/settings'
 
-const emit = defineEmits(['unlock'])
+const settingsStore = useSettingsStore()
 
 const password = ref('')
 const loading = ref(false)
 const error = ref(false)
 
-function handleSubmit() {
+async function handleSubmit() {
+  if (!password.value) return
   loading.value = true
   error.value = false
-  setTimeout(() => {
-    const ok = emit('unlock', password.value) // 父组件会调用 settingsStore.tryUnlock
-    if (!ok) {
-      error.value = true
-      password.value = ''
-    }
-    loading.value = false
-  }, 300)
+  const ok = await settingsStore.tryUnlock(password.value)
+  if (!ok) {
+    error.value = true
+    password.value = ''
+  }
+  loading.value = false
 }
 </script>
 

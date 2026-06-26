@@ -1,12 +1,80 @@
 import { Router } from 'express'
-import { queryAll, queryOne, execute } from '../db.js'
+import bcrypt from 'bcryptjs'
+import { queryAll, queryOne, execute, getSetting, setSetting } from '../db.js'
 import { scanGames } from '../scanner.js'
-import { adminAuth } from '../middleware/auth.js'
+import { adminAuth, generateToken } from '../middleware/auth.js'
 
 const router = Router()
 
-// 所有管理接口都需要密码验证
+// ============ 公开接口（无需 JWT） ============
+
+/**
+ * POST /api/admin/login - 管理员登录
+ * Body: { username, password }
+ * 返回: { token, user }
+ */
+router.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body
+    if (!username || !password) {
+      return res.status(400).json({ error: '请输入账号和密码' })
+    }
+
+    const user = queryOne('SELECT * FROM users WHERE username=?', [username])
+    if (!user) {
+      return res.status(401).json({ error: '账号或密码错误' })
+    }
+
+    const valid = await bcrypt.compare(password, user.password_hash)
+    if (!valid) {
+      return res.status(401).json({ error: '账号或密码错误' })
+    }
+
+    const token = generateToken(user)
+    res.json({
+      token,
+      user: { id: user.id, username: user.username, role: user.role },
+    })
+  } catch (err) {
+    console.error('登录失败:', err)
+    res.status(500).json({ error: '登录失败: ' + err.message })
+  }
+})
+
+// ============ 以下接口需要 JWT 验证 ============
 router.use(adminAuth)
+
+/**
+ * GET /api/admin/settings/lock - 获取前端锁配置
+ */
+router.get('/settings/lock', (req, res) => {
+  const lockEnabled = getSetting('lock_enabled') === '1'
+  res.json({ lockEnabled })
+})
+
+/**
+ * PUT /api/admin/settings/lock - 更新前端锁配置
+ * Body: { lockEnabled?, lockPassword? }
+ */
+router.put('/settings/lock', async (req, res) => {
+  try {
+    const { lockEnabled, lockPassword } = req.body
+
+    if (lockEnabled !== undefined) {
+      setSetting('lock_enabled', lockEnabled ? '1' : '0')
+    }
+
+    if (lockPassword) {
+      const hash = await bcrypt.hash(lockPassword, 10)
+      setSetting('lock_password_hash', hash)
+    }
+
+    res.json({ message: '设置已更新' })
+  } catch (err) {
+    console.error('更新锁设置失败:', err)
+    res.status(500).json({ error: '更新失败: ' + err.message })
+  }
+})
 
 /**
  * POST /api/admin/scan - 触发重新扫描

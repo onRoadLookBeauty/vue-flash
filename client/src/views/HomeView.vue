@@ -119,15 +119,6 @@
           <el-option label="canvas" value="canvas" />
         </el-select>
       </div>
-      <div class="setting-item">
-        <span>前端密码锁</span>
-        <el-switch v-model="settingsStore.lockEnabled" />
-      </div>
-      <div class="setting-item" v-if="settingsStore.lockEnabled">
-        <span>修改密码</span>
-        <el-input v-model="newPassword" placeholder="留空不修改" show-password style="width:160px" />
-        <el-button size="small" @click="updatePassword" :disabled="!newPassword">保存</el-button>
-      </div>
     </el-dialog>
   </div>
 </template>
@@ -149,7 +140,6 @@ const selectedCategory = ref('')
 const sortBy = ref('default')
 const showFavs = ref(false)
 const showSettings = ref(false)
-const newPassword = ref('')
 const currentPage = ref(1)
 const pageSize = 24
 
@@ -207,12 +197,6 @@ function resetFilters() {
 
 function toggleTheme() {
   settingsStore.theme = settingsStore.theme === 'dark' ? 'light' : 'dark'
-}
-
-function updatePassword() {
-  settingsStore.lockPassword = newPassword.value
-  newPassword.value = ''
-  ElMessage.success('密码已更新')
 }
 
 onMounted(() => {

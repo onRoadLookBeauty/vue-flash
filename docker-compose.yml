@@ -14,7 +14,6 @@ services:
       # SQLite 数据库持久化
       - ./data:/app/data
     environment:
-      - ADMIN_PASSWORD=flash2024
       # 如需运行管理端口（与 API 分离），设置 ADMIN_PORT=3001
       # - ADMIN_PORT=3001
     restart: unless-stopped
@@ -29,6 +28,5 @@ services:
   #     - ./game:/app/game
   #     - ./data:/app/data
   #   environment:
-  #     - ADMIN_PASSWORD=flash2024
   #     - PORT=3001
   #   restart: unless-stopped

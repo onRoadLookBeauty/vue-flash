@@ -3,23 +3,48 @@
     <div class="admin-topbar">
       <el-button :icon="ArrowLeft" text @click="router.push('/')">返回首页</el-button>
       <h2>管理后台</h2>
-      <el-button text type="danger" @click="handleLogout" style="margin-left:auto">退出登录</el-button>
+      <el-button v-if="authStore.isLoggedIn" text type="danger" @click="handleLogout" style="margin-left:auto">退出登录</el-button>
     </div>
 
     <div class="admin-content">
-      <!-- 密码验证 -->
-      <div v-if="!adminAuthed" class="admin-auth">
-        <h3>请输入管理密码</h3>
-        <el-input
-          v-model="adminPassword"
-          type="password"
-          placeholder="管理密码"
-          show-password
-          @keyup.enter="authAdmin"
-          style="width:280px;margin:16px 0"
-        />
-        <el-button type="primary" @click="authAdmin" :loading="authLoading">验证</el-button>
-        <p v-if="authError" style="color:#f56c6c;margin-top:12px">{{ authError }}</p>
+      <!-- 登录表单 -->
+      <div v-if="!authStore.isLoggedIn" class="login-shell">
+        <div class="login-card">
+          <div class="login-header">
+            <div class="login-icon">🔑</div>
+            <h2>管理员登录</h2>
+            <p>请使用安装时设置的管理员账号登录</p>
+          </div>
+          <el-form @submit.prevent="handleLogin" class="login-form">
+            <el-form-item>
+              <el-input
+                v-model="loginForm.username"
+                placeholder="管理员账号"
+                :prefix-icon="User"
+                size="large"
+                @keyup.enter="focusPassword"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-input
+                v-model="loginForm.password"
+                ref="pwdInput"
+                type="password"
+                placeholder="管理员密码"
+                show-password
+                :prefix-icon="Lock"
+                size="large"
+                @keyup.enter="handleLogin"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" size="large" @click="handleLogin" :loading="loginLoading" class="login-btn">
+                登 录
+              </el-button>
+            </el-form-item>
+          </el-form>
+          <p v-if="loginError" class="login-error">{{ loginError }}</p>
+        </div>
       </div>
 
       <!-- 管理面板 -->
@@ -42,6 +67,34 @@
             重新扫描游戏目录
           </el-button>
           <span class="hint">放入新 SWF 文件后点击刷新</span>
+        </div>
+
+        <!-- 前端锁管理 -->
+        <div class="section">
+          <h3>🔒 前端锁管理</h3>
+          <p class="section-desc">控制访客是否需要密码才能访问游戏页面</p>
+          <div class="lock-admin">
+            <div class="lock-row">
+              <span>启用前端锁：</span>
+              <el-switch v-model="lockSettings.lockEnabled" @change="handleLockToggle" :loading="lockSaving" />
+              <span style="margin-left:8px;font-size:12px;color:var(--text-muted)">
+                {{ lockSettings.lockEnabled ? '已开启，访客需输入密码' : '已关闭，访客可直接访问' }}
+              </span>
+            </div>
+            <div v-if="lockSettings.lockEnabled" class="lock-row" style="margin-top:12px">
+              <span>修改锁密码：</span>
+              <el-input
+                v-model="lockSettings.newPassword"
+                type="password"
+                placeholder="新密码（留空不修改）"
+                show-password
+                style="width:200px;margin:0 8px"
+              />
+              <el-button size="small" @click="handleUpdateLockPassword" :loading="lockSaving" :disabled="!lockSettings.newPassword">
+                保存
+              </el-button>
+            </div>
+          </div>
         </div>
 
         <!-- 分类管理 -->
@@ -109,62 +162,96 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, Refresh } from '@element-plus/icons-vue'
-import { getGames, getStats, rescanGames, updateGame, getCategories, addCategory, deleteCategory } from '@/api'
+import { ArrowLeft, Refresh, User, Lock } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
+import {
+  getGames, getStats, rescanGames, updateGame, getCategories,
+  addCategory, deleteCategory, apiGetLockSettings, apiUpdateLockSettings,
+} from '@/api'
 
 const router = useRouter()
-const ADMIN_AUTH_KEY = 'flash_admin_auth'
+const authStore = useAuthStore()
 
-const adminAuthed = ref(false)
-const adminPassword = ref('')
-const authLoading = ref(false)
-const authError = ref('')
+// 登录
+const loginForm = reactive({ username: '', password: '' })
+const loginLoading = ref(false)
+const loginError = ref('')
+const pwdInput = ref(null)
 
+function focusPassword() {
+  pwdInput.value?.focus()
+}
+
+async function handleLogin() {
+  if (!loginForm.username || !loginForm.password) {
+    loginError.value = '请输入账号和密码'
+    return
+  }
+  loginLoading.value = true
+  loginError.value = ''
+  try {
+    await authStore.login(loginForm.username, loginForm.password)
+    ElMessage.success('登录成功')
+    await loadAdminData()
+  } catch (e) {
+    loginError.value = e.response?.data?.error || '登录失败'
+  } finally {
+    loginLoading.value = false
+  }
+}
+
+function handleLogout() {
+  authStore.logout()
+  router.push('/')
+}
+
+// 管理数据
 const stats = ref({ total: 0, categories: {} })
 const adminGames = ref([])
 const cats = ref([])
 const rescanning = ref(false)
 const newCat = ref('')
 
-// 获取保存的密码（localStorage）
-function getSavedPassword() {
-  return localStorage.getItem(ADMIN_AUTH_KEY) || ''
+// 前端锁设置
+const lockSaving = ref(false)
+const lockSettings = reactive({
+  lockEnabled: false,
+  newPassword: '',
+})
+
+async function loadLockSettings() {
+  try {
+    const res = await apiGetLockSettings()
+    lockSettings.lockEnabled = res.data.lockEnabled
+  } catch {}
 }
 
-function authAdmin() {
-  authLoading.value = true
-  authError.value = ''
-
-  // 验证：本地密码 或 'admin'
-  if (adminPassword.value === getSavedPassword() || adminPassword.value === 'admin' || adminPassword.value === 'flash2024') {
-    // 保存密码到 localStorage（首次用默认密码时保存）
-    if (!getSavedPassword()) {
-      localStorage.setItem(ADMIN_AUTH_KEY, adminPassword.value)
-    }
-    adminAuthed.value = true
-    loadAdminData()
-  } else {
-    authError.value = '密码错误'
+async function handleLockToggle(val) {
+  lockSaving.value = true
+  try {
+    await apiUpdateLockSettings({ lockEnabled: val })
+    ElMessage.success(val ? '前端锁已开启' : '前端锁已关闭')
+  } catch (e) {
+    lockSettings.lockEnabled = !val // 回滚
+    ElMessage.error('保存失败')
   }
-  authLoading.value = false
+  lockSaving.value = false
 }
 
-// 自动登录（已有保存的密码）
-function tryAutoAuth() {
-  const saved = getSavedPassword()
-  if (saved) {
-    adminPassword.value = saved
-    adminAuthed.value = true
-    loadAdminData()
+async function handleUpdateLockPassword() {
+  if (!lockSettings.newPassword) return
+  lockSaving.value = true
+  try {
+    await apiUpdateLockSettings({ lockPassword: lockSettings.newPassword })
+    lockSettings.newPassword = ''
+    ElMessage.success('锁密码已更新')
+  } catch (e) {
+    ElMessage.error('保存失败')
   }
-}
-
-function handleLogout() {
-  adminAuthed.value = false
-  adminPassword.value = ''
-  localStorage.removeItem(ADMIN_AUTH_KEY)
+  lockSaving.value = false
 }
 
 async function loadAdminData() {
@@ -199,8 +286,7 @@ function formatSize(bytes) {
 async function handleRescan() {
   rescanning.value = true
   try {
-    const pwd = getSavedPassword()
-    const res = await rescanGames(pwd)
+    const res = await rescanGames()
     ElMessage.success(res.data?.message || '扫描完成')
     await loadAdminData()
   } catch (e) {
@@ -210,15 +296,13 @@ async function handleRescan() {
 }
 
 async function handleTagsChange(row, tags) {
-  // 限制最多 3 个标签
   if (tags.length > 3) {
     row._editTags = tags.slice(0, 3)
     return
   }
   try {
     const tagsStr = tags.join(',')
-    const pwd = getSavedPassword()
-    await updateGame(row.id, { tags: tagsStr }, pwd)
+    await updateGame(row.id, { tags: tagsStr })
     row.tags = tagsStr
     row.category = tags[0] || '未分类'
     ElMessage.success('标签已更新')
@@ -235,8 +319,7 @@ async function handleAddCategory() {
     return
   }
   try {
-    const pwd = getSavedPassword()
-    await addCategory(newCat.value, pwd)
+    await addCategory(newCat.value)
     cats.value.push(newCat.value)
     cats.value.sort()
     newCat.value = ''
@@ -248,8 +331,7 @@ async function handleAddCategory() {
 
 async function handleDeleteCategory(cat) {
   try {
-    const pwd = getSavedPassword()
-    await deleteCategory(cat, pwd)
+    await deleteCategory(cat)
     cats.value = cats.value.filter(c => c !== cat)
     ElMessage.success(`分类 "${cat}" 已删除`)
   } catch (e) {
@@ -258,7 +340,11 @@ async function handleDeleteCategory(cat) {
 }
 
 onMounted(() => {
-  tryAutoAuth()
+  // 如果已登录，直接加载数据
+  if (authStore.isLoggedIn) {
+    loadAdminData()
+    loadLockSettings()
+  }
 })
 </script>
 
@@ -286,10 +372,65 @@ onMounted(() => {
   padding: 24px;
 }
 
-.admin-auth {
-  text-align: center;
-  padding: 60px 0;
+/* ===== 登录页 ===== */
+.login-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 100px);
+  padding: 40px 20px;
 }
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--bg-card, #fff);
+  border-radius: 16px;
+  padding: 40px 36px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.login-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.login-header h2 {
+  font-size: 22px;
+  color: var(--text-primary, #333);
+  margin-bottom: 8px;
+}
+
+.login-header p {
+  font-size: 13px;
+  color: var(--text-muted, #999);
+}
+
+.login-form {
+  margin-top: 8px;
+}
+
+.login-form :deep(.el-form-item) {
+  margin-bottom: 18px;
+}
+
+.login-btn {
+  width: 100%;
+}
+
+.login-error {
+  color: #f56c6c;
+  text-align: center;
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+/* ===== 管理面板 ===== */
 
 .stats-row {
   display: flex;
@@ -328,6 +469,15 @@ onMounted(() => {
 
 .section h3 { margin-bottom: 8px; }
 .section-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+
+.lock-admin {
+  padding-top: 4px;
+}
+
+.lock-row {
+  display: flex;
+  align-items: center;
+}
 
 .category-list { margin-bottom: 12px; }
 

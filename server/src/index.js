@@ -4,9 +4,11 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
 
-import { initDb, queryAll } from './db.js'
+import bcrypt from 'bcryptjs'
+import { initDb, queryAll, getSetting, isSetupComplete } from './db.js'
 import gamesRouter from './routes/games.js'
 import adminRouter from './routes/admin.js'
+import setupRouter from './routes/setup.js'
 import { scanGames, startWatcher, getCategories } from './scanner.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -49,6 +51,36 @@ if (fs.existsSync(clientDist)) {
 
 // 游戏查询 API（公网暴露）
 app.use('/api/games', gamesRouter)
+
+// 安装引导
+app.use('/api/setup', setupRouter)
+
+// 公开：获取前端锁状态
+app.get('/api/settings/lock', (req, res) => {
+  const lockEnabled = getSetting('lock_enabled') === '1'
+  res.json({ lockEnabled })
+})
+
+// 公开：前端锁密码验证
+app.post('/api/unlock', async (req, res) => {
+  try {
+    const { password } = req.body
+    if (!password) return res.status(400).json({ error: '请输入密码' })
+
+    const hash = getSetting('lock_password_hash')
+    if (!hash) return res.status(400).json({ error: '系统未配置前端锁密码' })
+
+    const valid = await bcrypt.compare(password, hash)
+    if (valid) {
+      res.json({ success: true })
+    } else {
+      res.status(401).json({ error: '密码错误' })
+    }
+  } catch (err) {
+    console.error('解锁验证失败:', err)
+    res.status(500).json({ error: '验证失败' })
+  }
+})
 
 // 分类查询（categories 表 + 游戏 tags 合并去重）
 app.get('/api/categories', (req, res) => {
