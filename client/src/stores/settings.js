@@ -4,6 +4,7 @@ import { apiGetLockStatus, apiUnlock } from '@/api'
 
 const SETTINGS_KEY = 'flash_settings'
 const LOCK_KEY = 'flash_lock'
+const LOCK_HASH_KEY = 'flash_lock_hash'  // 锁版本标识，密码一变就失效
 
 export const useSettingsStore = defineStore('settings', () => {
   // ========== 界面设置 ==========
@@ -17,6 +18,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const lockEnabled = ref(false)       // 服务端控制开关
   const lockChecked = ref(false)       // 是否已从服务端获取锁状态
   const unlocked = ref(false)
+  const lockHash = ref('')             // 锁版本标识（密码哈希前缀）
 
   function loadSetting(key, defaultValue) {
     try {
@@ -48,6 +50,7 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const res = await apiGetLockStatus()
       lockEnabled.value = res.data.lockEnabled
+      lockHash.value = res.data.lockHash || ''
       lockChecked.value = true
       // 如果没有开启锁，直接解锁
       if (!lockEnabled.value) {
@@ -67,6 +70,10 @@ export const useSettingsStore = defineStore('settings', () => {
       if (res.data.success) {
         unlocked.value = true
         localStorage.setItem(LOCK_KEY, '1')
+        // 记住当前锁版本，密码变更后自动失效
+        if (lockHash.value) {
+          localStorage.setItem(LOCK_HASH_KEY, lockHash.value)
+        }
         return true
       }
       return false
@@ -81,9 +88,17 @@ export const useSettingsStore = defineStore('settings', () => {
       unlocked.value = true
       return true
     }
+    // 检查是否有本地解锁记录，且锁版本未变更
     if (localStorage.getItem(LOCK_KEY) === '1') {
-      unlocked.value = true
-      return true
+      const storedHash = localStorage.getItem(LOCK_HASH_KEY) || ''
+      // 没有存储过 hash（旧版本升级）或 hash 匹配 → 保持解锁
+      if (!lockHash.value || storedHash === lockHash.value) {
+        unlocked.value = true
+        return true
+      }
+      // hash 不匹配 → 密码已被管理员修改，清除旧解锁状态
+      localStorage.removeItem(LOCK_KEY)
+      localStorage.removeItem(LOCK_HASH_KEY)
     }
     return false
   }
@@ -91,11 +106,12 @@ export const useSettingsStore = defineStore('settings', () => {
   function lock() {
     unlocked.value = false
     localStorage.removeItem(LOCK_KEY)
+    localStorage.removeItem(LOCK_HASH_KEY)
   }
 
   return {
     theme, autoplay, scale, quality, preferredRenderer,
-    lockEnabled, lockChecked, unlocked,
+    lockEnabled, lockChecked, unlocked, lockHash,
     fetchLockStatus, tryUnlock, checkLocalUnlock, lock, saveSettings,
   }
 })

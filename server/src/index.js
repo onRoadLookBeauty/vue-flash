@@ -103,10 +103,13 @@ app.use('/api/games', gamesRouter)
 // 安装引导（限流 + 防止重复安装）
 app.use('/api/setup', authLimiter, setupRouter)
 
-// 公开：获取前端锁状态
+// 公开：获取前端锁状态（含 lockHash 用于检测密码变更）
 app.get('/api/settings/lock', (req, res) => {
   const lockEnabled = getSetting('lock_enabled') === '1'
-  res.json({ lockEnabled })
+  const lockPasswordHash = getSetting('lock_password_hash') || ''
+  // 取 bcrypt 哈希前 20 位作为版本标识，密码变更后哈希完全不同，前端旧解锁自动失效
+  const lockHash = lockPasswordHash ? lockPasswordHash.substring(0, 20) : ''
+  res.json({ lockEnabled, lockHash })
 })
 
 // 公开：前端锁密码验证（限流防爆破）
