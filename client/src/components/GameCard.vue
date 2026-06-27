@@ -84,7 +84,8 @@ function formatDate(dateStr) {
 }
 
 function goPlay() {
-  router.push(`/play/${props.game.id}`)
+  const url = router.resolve(`/play/${props.game.id}`).href
+  window.open(url, '_blank')
 }
 </script>
 
