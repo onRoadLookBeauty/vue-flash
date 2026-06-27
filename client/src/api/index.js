@@ -96,6 +96,11 @@ export function rescanGames() {
   return api.post('/admin/scan')
 }
 
+/** 获取扫描进度状态 */
+export function getScanStatus() {
+  return api.get('/scan/status')
+}
+
 /** 更新游戏信息（支持 tags 多标签） */
 export function updateGame(id, data) {
   return api.put(`/admin/games/${id}`, data)

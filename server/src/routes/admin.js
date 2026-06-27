@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { queryAll, queryOne, execute, getSetting, setSetting } from '../db.js'
-import { scanGames } from '../scanner.js'
+import { scanGames, getScanStatus } from '../scanner.js'
 import { adminAuth, generateToken } from '../middleware/auth.js'
 
 const router = Router()
@@ -78,11 +78,18 @@ router.put('/settings/lock', async (req, res) => {
 
 /**
  * POST /api/admin/scan - 触发重新扫描
+ * 返回: { success, message, isScanning, progress }
+ * 前端收到后轮询 GET /api/scan/status 获取进度
  */
 router.post('/scan', (req, res) => {
-  console.log('收到扫描请求...')
-  const result = scanGames()
-  res.json({ message: '扫描完成', ...result })
+  console.log('收到手动扫描请求...')
+  if (getScanStatus().isScanning) {
+    return res.json({ success: false, message: '扫描正在进行中，请等待', isScanning: true, progress: getScanStatus().progress })
+  }
+  scanGames(() => {
+    console.log('手动扫描完成')
+  })
+  res.json({ success: true, message: '扫描已启动', isScanning: true, progress: getScanStatus().progress })
 })
 
 /**

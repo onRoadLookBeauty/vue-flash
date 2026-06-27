@@ -16,6 +16,7 @@ function escapeHtml(str) {
 
 // 允许的排序字段白名单
 const ALLOWED_SORTS = new Set([
+  'id_asc', 'id_desc',
   'name_asc', 'name_desc',
   'size_asc', 'size_desc',
   'date_asc', 'date_desc',
@@ -23,22 +24,23 @@ const ALLOWED_SORTS = new Set([
 
 /**
  * GET /api/games - 获取游戏列表
- * 支持: keyword, category (匹配 tags), sort, page, limit
+ * 支持: keyword, category (匹配 tags), ids (逗号分隔ID列表), sort, page, limit
  */
 router.get('/', (req, res) => {
   const {
     keyword = '',
     category = '',
-    sort = 'name_asc',
+    ids = '',
+    sort = 'id_desc',
     page = 1,
     limit = 100,
   } = req.query
 
   // 参数校验
   const pageNum = Math.max(1, parseInt(page) || 1)
-  const limitNum = Math.min(200, Math.max(1, parseInt(limit) || 100)) // 限制 1~200
+  const limitNum = Math.min(500, Math.max(1, parseInt(limit) || 30))
   const sortStr = ALLOWED_SORTS.has(sort) ? sort : 'name_asc'
-  const keywordStr = String(keyword).trim().slice(0, 100) // 限制搜索词长度
+  const keywordStr = String(keyword).trim().slice(0, 100)
   const categoryStr = String(category).trim().slice(0, 50)
 
   const conditions = ['active = 1']
@@ -50,20 +52,33 @@ router.get('/', (req, res) => {
   }
 
   if (categoryStr) {
-    // tags 是逗号分隔的，用 LIKE 匹配
     conditions.push('tags LIKE ?')
     params.push(`%${categoryStr}%`)
   }
 
+  // 收藏/指定ID查询
+  const idList = String(ids).trim()
+    .split(',')
+    .map(s => parseInt(s.trim()))
+    .filter(n => !isNaN(n) && n > 0)
+  if (idList.length > 0) {
+    const placeholders = idList.map(() => '?').join(',')
+    conditions.push(`id IN (${placeholders})`)
+    params.push(...idList)
+  }
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
-  let orderBy = 'name ASC'
+  let orderBy = 'id DESC'
   switch (sortStr) {
+    case 'id_asc':    orderBy = 'id ASC'; break
+    case 'id_desc':   orderBy = 'id DESC'; break
     case 'name_desc': orderBy = 'name DESC'; break
     case 'size_desc': orderBy = 'size DESC'; break
     case 'size_asc':  orderBy = 'size ASC'; break
     case 'date_desc': orderBy = 'created_at DESC'; break
     case 'date_asc':  orderBy = 'created_at ASC'; break
+	// name_asc, id_desc (default) → already handled
   }
 
   const countResult = queryOne(`SELECT COUNT(*) as total FROM games ${where}`, params)

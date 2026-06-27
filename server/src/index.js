@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
@@ -11,7 +12,7 @@ import { initDb, queryAll, getSetting, isSetupComplete } from './db.js'
 import gamesRouter from './routes/games.js'
 import adminRouter from './routes/admin.js'
 import setupRouter from './routes/setup.js'
-import { scanGames, startWatcher, getCategories } from './scanner.js'
+import { scanGames, startWatcher, getCategories, getScanStatus } from './scanner.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -145,6 +146,11 @@ app.get('/api/categories', (req, res) => {
   res.json(Array.from(catSet).sort())
 })
 
+// 扫描状态（前端轮询，显示进度条）
+app.get('/api/scan/status', (req, res) => {
+  res.json(getScanStatus())
+})
+
 // 统计信息
 app.get('/api/stats', (req, res) => {
   const categories = getCategories()
@@ -173,19 +179,7 @@ async function start() {
   // 初始化数据库
   await initDb()
 
-  // 初始扫描
-  console.log('\n正在扫描游戏目录...')
-  const scanResult = scanGames()
-  gameTotal = scanResult.total
-  console.log(`扫描完成: 共 ${scanResult.total} 个可用游戏`)
-  console.log(`新增 ${scanResult.added} 个, 缺失 ${scanResult.removed} 个\n`)
-
-  // 启动文件监听
-  startWatcher((result) => {
-    gameTotal = result.total
-  })
-
-  // 启动 HTTP 服务
+  // ===== 先启动 HTTP 服务，确保外部立即可访问 =====
   const server = app.listen(PORT, () => {
     console.log(`API 服务已启动: http://localhost:${PORT}`)
     console.log(`游戏目录: ${GAME_DIR}`)
@@ -200,6 +194,19 @@ async function start() {
       console.error('服务器错误:', err)
     }
     process.exit(1)
+  })
+
+  // ===== 异步扫描游戏目录（分批处理，不阻塞 HTTP） =====
+  console.log('\n正在扫描游戏目录...')
+  scanGames((result) => {
+    gameTotal = result.total
+    console.log(`扫描完成: 共 ${result.total} 个可用游戏`)
+    console.log(`新增 ${result.added} 个, 缺失 ${result.removed} 个\n`)
+
+    // 扫描完成后启动文件监听
+    startWatcher((res) => {
+      gameTotal = res.total
+    })
   })
 }
 

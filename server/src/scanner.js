@@ -2,22 +2,31 @@ import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
-import { queryAll, queryOne, execute, saveDb } from './db.js'
+import { queryAll, queryOne, executeWithoutSave, saveDb } from './db.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const GAME_DIR = process.env.GAME_DIR || path.resolve(__dirname, '..', '..', 'game')
 
+// ============ 扫描状态（供前端轮询） ============
+let isScanning = false
+let scanProgress = { scanned: 0, total: 0 }
+
+export function getScanStatus() {
+  return { isScanning, progress: { ...scanProgress } }
+}
+
 /**
  * 递归扫描 game/ 目录下的 .swf 文件
- * - 子目录名自动作为主分类标签
- * - 文件名关键词作为附加标签
- * - 支持多标签（逗号分隔存入 tags 字段）
+ * - 支持异步批量模式（传入 callback）：分批处理，每批后让出事件循环
+ * - 支持同步模式（无 callback）：用于文件监听触发的快速扫描
  */
-export function scanGames() {
+export function scanGames(onComplete) {
   if (!fs.existsSync(GAME_DIR)) {
     console.warn(`游戏目录不存在: ${GAME_DIR}`)
     fs.mkdirSync(GAME_DIR, { recursive: true })
-    return { added: 0, removed: 0, total: 0 }
+    const result = { added: 0, removed: 0, total: 0 }
+    if (onComplete) onComplete(result)
+    return result
   }
 
   // 收集所有 SWF 文件（递归）
@@ -25,61 +34,77 @@ export function scanGames() {
   const dbRecords = queryAll('SELECT id, filepath, filename, tags, active FROM games')
   const dbMap = new Map(dbRecords.map(r => [r.filepath, r]))
 
+  if (onComplete) {
+    // 异步批量模式（首次扫描/手动扫描）
+    isScanning = true
+    scanProgress = { scanned: 0, total: allFiles.length }
+    batchProcess(allFiles, dbMap, 0, 0, onComplete)
+    // 不返回结果，由 callback 通知
+    return { added: 0, removed: 0, total: 0 }
+  } else {
+    // 同步模式（文件监听触发的增量扫描）
+    return syncProcess(allFiles, dbMap)
+  }
+}
+
+/**
+ * 异步批量处理（每批 200 个，批间 setImmediate 让出事件循环）
+ */
+function batchProcess(allFiles, dbMap, startIndex, added, onComplete) {
+  const BATCH_SIZE = 200
+
+  let i = startIndex
+  const end = Math.min(i + BATCH_SIZE, allFiles.length)
+
+  for (; i < end; i++) {
+    const item = allFiles[i]
+    try {
+      if (processOneFile(item, dbMap)) added++
+    } catch (err) {
+      console.error(`  扫描错误 (${item.filepath}):`, err.message)
+    }
+  }
+
+  // 保存本批结果到磁盘
+  saveDb()
+  scanProgress = { scanned: end, total: allFiles.length }
+  console.log(`  扫描进度: ${end}/${allFiles.length} (${Math.round(end / allFiles.length * 100)}%)`)
+
+  if (end >= allFiles.length) {
+    // 全部完成：标记缺失游戏
+    const removed = markMissing(allFiles, dbMap)
+
+    saveDb()
+    isScanning = false
+    scanProgress = { scanned: allFiles.length, total: allFiles.length }
+
+    const result = queryOne('SELECT COUNT(*) as count FROM games WHERE active = 1')
+    const total = result ? result.count : 0
+
+    console.log(`扫描完成: 共 ${total} 个可用游戏，新增 ${added} 个，缺失 ${removed} 个`)
+    if (onComplete) onComplete({ added, removed, total })
+  } else {
+    // 让出事件循环，下一批
+    setImmediate(() => batchProcess(allFiles, dbMap, end, added, onComplete))
+  }
+}
+
+/**
+ * 同步处理（用于文件监听触发的快速扫描）
+ */
+function syncProcess(allFiles, dbMap) {
   let added = 0
 
   for (const item of allFiles) {
-    const { filePath, filepath, filename, dirCategory } = item
     try {
-      const stat = fs.statSync(filePath)
-      const size = stat.size
-      const name = filename.replace(/\.swf$/i, '')
-
-      // 构建标签：子目录名 + 关键词猜测
-      const keywordTags = guessTags(name)
-      let tags
-      if (dirCategory && !keywordTags.includes(dirCategory)) {
-        tags = [dirCategory, ...keywordTags.filter(t => t !== '未分类')]
-      } else {
-        tags = keywordTags.length ? keywordTags : ['未分类']
-      }
-      // 去重
-      const uniqueTags = [...new Set(tags)]
-      const tagsStr = uniqueTags.join(',')
-      const primaryCategory = uniqueTags[0]
-
-      const existing = dbMap.get(filepath)
-
-      if (existing) {
-        // 更新已有记录
-        execute(
-          `UPDATE games SET filename=?, name=?, category=?, tags=?, size=?, active=1, updated_at=datetime('now','localtime') WHERE filepath=?`,
-          [filename, name, primaryCategory, tagsStr, size, filepath]
-        )
-      } else {
-        // 新增
-        execute(
-          `INSERT INTO games (filename, filepath, name, category, tags, size, active, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,1,datetime('now','localtime'),datetime('now','localtime'))`,
-          [filename, filepath, name, primaryCategory, tagsStr, size]
-        )
-        console.log(`  + 新增: ${name} [${tagsStr}]`)
-        added++
-      }
+      if (processOneFile(item, dbMap)) added++
     } catch (err) {
-      console.error(`  扫描错误 (${filepath}):`, err.message)
+      console.error(`  扫描错误 (${item.filepath}):`, err.message)
     }
   }
 
   // 标记缺失游戏
-  const actualFilepaths = new Set(allFiles.map(f => f.filepath))
-  let removed = 0
-  for (const [fp, record] of dbMap) {
-    if (!actualFilepaths.has(fp) && record.active === 1) {
-      execute('UPDATE games SET active=0, updated_at=datetime(\'now\',\'localtime\') WHERE id=?', [record.id])
-      console.log(`  - 缺失: ${fp}`)
-      removed++
-    }
-  }
+  const removed = markMissing(allFiles, dbMap)
 
   saveDb()
 
@@ -88,6 +113,69 @@ export function scanGames() {
 
   return { added, removed, total }
 }
+
+/**
+ * 处理单个文件（新增/更新），返回 true 表示是新增
+ */
+function processOneFile(item, dbMap) {
+  const { filePath, filepath, filename, dirCategory } = item
+  const stat = fs.statSync(filePath)
+  const size = stat.size
+  const name = filename.replace(/\.swf$/i, '')
+
+  // 构建标签：子目录名 + 关键词猜测
+  const keywordTags = guessTags(name)
+  let tags
+  if (dirCategory && !keywordTags.includes(dirCategory)) {
+    tags = [dirCategory, ...keywordTags.filter(t => t !== '未分类')]
+  } else {
+    tags = keywordTags.length ? keywordTags : ['未分类']
+  }
+  const uniqueTags = [...new Set(tags)]
+  const tagsStr = uniqueTags.join(',')
+  const primaryCategory = uniqueTags[0]
+
+  const existing = dbMap.get(filepath)
+
+  if (existing) {
+    // 更新已有记录
+    executeWithoutSave(
+      `UPDATE games SET filename=?, name=?, category=?, tags=?, size=?, active=1, updated_at=datetime('now','localtime') WHERE filepath=?`,
+      [filename, name, primaryCategory, tagsStr, size, filepath]
+    )
+    return false // 不是新增
+  } else {
+    // 新增（filepath 唯一，不会再有重复冲突）
+    executeWithoutSave(
+      `INSERT INTO games (filename, filepath, name, category, tags, size, active, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,1,datetime('now','localtime'),datetime('now','localtime'))`,
+      [filename, filepath, name, primaryCategory, tagsStr, size]
+    )
+    return true // 是新增
+  }
+}
+
+/**
+ * 标记数据库中已不存在于文件系统中的游戏
+ */
+function markMissing(allFiles, dbMap) {
+  const actualFilepaths = new Set(allFiles.map(f => f.filepath))
+  let removed = 0
+  for (const [fp, record] of dbMap) {
+    if (!actualFilepaths.has(fp) && record.active === 1) {
+      executeWithoutSave('UPDATE games SET active=0, updated_at=datetime(\'now\',\'localtime\') WHERE id=?', [record.id])
+      goneList.push(fp)
+      removed++
+    }
+  }
+  if (goneList.length > 0) {
+    console.log(`  缺失文件 (${goneList.length}): ${goneList.slice(0, 5).join(', ')}${goneList.length > 5 ? ' ...' : ''}`)
+  }
+  return removed
+}
+
+// markMissing 内部用的列表（移到外部避免污染）
+let goneList = []
 
 /**
  * 递归收集所有 .swf 文件
@@ -158,12 +246,9 @@ function computeMD5(filePath) {
 }
 
 /**
- * 启动文件监听
+ * 启动文件监听（不再做初始扫描，由调用方控制）
  */
 export function startWatcher(callback) {
-  const result = scanGames()
-  if (callback) callback(result)
-
   try {
     fs.watch(GAME_DIR, { recursive: true }, (eventType, changedFile) => {
       if (!changedFile) return
@@ -171,6 +256,7 @@ export function startWatcher(callback) {
       if (ext === '.swf') {
         console.log(`检测到文件变更 (${eventType}): ${changedFile}`)
         setTimeout(() => {
+          // 文件变更量小，用同步模式快速扫描
           const result = scanGames()
           if (callback) callback(result)
         }, 2000)

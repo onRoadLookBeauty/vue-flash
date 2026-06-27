@@ -12,7 +12,7 @@ data
 Thumbs.db
 
 # 环境配置
-.env
+server/.env
 .env.local
 .env.*.local
 

@@ -63,10 +63,23 @@
 
         <!-- 操作区 -->
         <div class="admin-actions">
-          <el-button type="primary" :icon="Refresh" @click="handleRescan" :loading="rescanning">
+          <el-button type="primary" :icon="Refresh" @click="handleRescan" :loading="rescanning" :disabled="rescanning">
             重新扫描游戏目录
           </el-button>
           <span class="hint">放入新 SWF 文件后点击刷新</span>
+        </div>
+
+        <!-- 扫描进度条 -->
+        <div v-if="scanProgress.isScanning || rescanning" class="scan-progress">
+          <div class="scan-progress-header">
+            <span class="scan-icon">⏳</span>
+            <span>正在扫描游戏目录...</span>
+            <span class="scan-progress-text">
+              {{ scanProgress.progress.scanned || 0 }} / {{ scanProgress.progress.total || 0 }}
+              ({{ scanPercent }}%)
+            </span>
+          </div>
+          <el-progress :percentage="scanPercent" :stroke-width="8" :show-text="false" />
         </div>
 
         <!-- 前端锁管理 -->
@@ -155,6 +168,18 @@
               </template>
             </el-table-column>
           </el-table>
+          <div class="table-pagination" v-if="adminTotal > adminPageSize">
+            <el-pagination
+              v-model:current-page="adminPage"
+              v-model:page-size="adminPageSize"
+              :page-sizes="[30, 50, 100]"
+              :total="adminTotal"
+              layout="total, sizes, prev, pager, next"
+              small
+              @current-change="onAdminPageChange"
+              @size-change="onAdminSizeChange"
+            />
+          </div>
         </div>
       </template>
     </div>
@@ -162,7 +187,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, Refresh, User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -170,6 +195,7 @@ import { useAuthStore } from '@/stores/auth'
 import {
   getGames, getStats, rescanGames, updateGame, getCategories,
   addCategory, deleteCategory, apiGetLockSettings, apiUpdateLockSettings,
+  getScanStatus,
 } from '@/api'
 
 const router = useRouter()
@@ -195,6 +221,7 @@ async function handleLogin() {
   try {
     await authStore.login(loginForm.username, loginForm.password)
     ElMessage.success('登录成功')
+    adminPage.value = 1
     await loadAdminData()
   } catch (e) {
     loginError.value = e.response?.data?.error || '登录失败'
@@ -214,6 +241,28 @@ const adminGames = ref([])
 const cats = ref([])
 const rescanning = ref(false)
 const newCat = ref('')
+
+// 游戏列表分页（服务端）
+const adminPage = ref(1)
+const adminPageSize = ref(50)
+const adminTotal = ref(0)
+
+function onAdminPageChange() {
+  loadAdminData()
+}
+
+function onAdminSizeChange() {
+  adminPage.value = 1
+  loadAdminData()
+}
+
+// 扫描进度
+const scanProgress = ref({ isScanning: false, progress: { scanned: 0, total: 0 } })
+let scanPollTimer = null
+const scanPercent = computed(() => {
+  const { scanned, total } = scanProgress.value.progress
+  return total > 0 ? Math.round((scanned / total) * 100) : 0
+})
 
 // 前端锁设置
 const lockSaving = ref(false)
@@ -257,10 +306,11 @@ async function handleUpdateLockPassword() {
 async function loadAdminData() {
   try {
     const [gamesRes, statsRes, catsRes] = await Promise.all([
-      getGames({ limit: 2000 }),
+      getGames({ page: adminPage.value, limit: adminPageSize.value }),
       getStats(),
       getCategories(),
     ])
+    adminTotal.value = gamesRes.data.total ?? gamesRes.data.games?.length ?? 0
     adminGames.value = (gamesRes.data.games || gamesRes.data).map(g => ({
       ...g,
       _editTags: parseTags(g.tags || g.category || '未分类'),
@@ -284,15 +334,50 @@ function formatSize(bytes) {
 }
 
 async function handleRescan() {
+  if (rescanning.value) return
   rescanning.value = true
   try {
     const res = await rescanGames()
-    ElMessage.success(res.data?.message || '扫描完成')
-    await loadAdminData()
+    if (res.data?.success) {
+      ElMessage.success('扫描已启动')
+      scanProgress.value = { isScanning: true, progress: res.data.progress || { scanned: 0, total: 0 } }
+      startScanPolling()
+    } else {
+      ElMessage.warning(res.data?.message || '操作失败')
+      rescanning.value = false
+    }
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '扫描失败')
+    rescanning.value = false
   }
-  rescanning.value = false
+}
+
+function startScanPolling() {
+  clearInterval(scanPollTimer)
+  scanPollTimer = setInterval(async () => {
+    try {
+      const res = await getScanStatus()
+      scanProgress.value = res.data
+      if (!res.data.isScanning) {
+        // 扫描完成
+        clearInterval(scanPollTimer)
+        scanPollTimer = null
+        rescanning.value = false
+        ElMessage.success(`扫描完成：共 ${stats.value.total || res.data.progress?.total || 0} 个游戏`)
+        adminPage.value = 1
+        await loadAdminData()
+      }
+    } catch {
+      // 网络错误不管，继续重试
+    }
+  }, 1500)
+}
+
+function stopScanPolling() {
+  if (scanPollTimer) {
+    clearInterval(scanPollTimer)
+    scanPollTimer = null
+  }
 }
 
 async function handleTagsChange(row, tags) {
@@ -339,12 +424,27 @@ async function handleDeleteCategory(cat) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // 检查是否有正在进行的扫描（启动阶段触发的）
+  try {
+    const statusRes = await getScanStatus()
+    if (statusRes.data?.isScanning) {
+      scanProgress.value = statusRes.data
+      rescanning.value = true
+      startScanPolling()
+    }
+  } catch {}
+
   // 如果已登录，直接加载数据
   if (authStore.isLoggedIn) {
+    adminPage.value = 1
     loadAdminData()
     loadLockSettings()
   }
+})
+
+onUnmounted(() => {
+  stopScanPolling()
 })
 </script>
 
@@ -459,6 +559,34 @@ onMounted(() => {
 
 .hint { font-size: 12px; color: var(--text-muted); }
 
+.scan-progress {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: var(--bg-card);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+.scan-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.scan-icon {
+  font-size: 18px;
+}
+
+.scan-progress-text {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .section {
   margin-top: 24px;
   padding: 20px;
@@ -488,5 +616,11 @@ onMounted(() => {
 
 .tag-editor {
   width: 100%;
+}
+
+.table-pagination {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
 }
 </style>

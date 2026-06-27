@@ -10,6 +10,7 @@ export const useGamesStore = defineStore('games', () => {
   const stats = ref({ total: 0, categories: {} })
   const loading = ref(false)
   const currentGame = ref(null)
+  const total = ref(0)  // 服务端返回的总数，用于分页
 
   // 收藏列表 (localStorage)
   const favorites = ref(loadFavorites())
@@ -40,15 +41,17 @@ export const useGamesStore = defineStore('games', () => {
     return favoriteIds.value.has(id)
   }
 
-  // 获取游戏列表
+  // 获取游戏列表（支持服务端分页）
   async function fetchGames(params = {}) {
     loading.value = true
     try {
       const res = await getGames(params)
       games.value = res.data.games || res.data
+      total.value = res.data.total ?? games.value.length
     } catch (err) {
       console.error('获取游戏列表失败:', err)
       games.value = []
+      total.value = 0
     } finally {
       loading.value = false
     }
@@ -88,7 +91,7 @@ export const useGamesStore = defineStore('games', () => {
   }
 
   return {
-    games, categories, stats, loading, currentGame,
+    games, categories, stats, loading, currentGame, total,
     favorites, favoriteIds,
     isFavorite, toggleFavorite,
     fetchGames, fetchCategories, fetchGameById, fetchStats,

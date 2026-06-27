@@ -58,6 +58,52 @@ export async function initDb() {
   // 把旧数据的 filepath 初始化为 filename（根目录游戏）
   db.run("UPDATE games SET filepath = filename WHERE filepath IS NULL OR filepath = ''")
 
+  // ============ 数据库迁移 v1 → v2: UNIQUE 约束从 filename 改为 filepath ============
+  try {
+    const tableInfo = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='games'")
+    if (tableInfo.length > 0 && tableInfo[0].values.length > 0) {
+      const createSql = tableInfo[0].values[0][0]
+      if (createSql.includes('filename') && (createSql.includes('UNIQUE') || createSql.includes('unique'))) {
+        // 检查 UNIQUE 是否在 filename 上（而不是 filepath）
+        const hasFilenameUnique = /filename\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(createSql)
+        const hasFilepathUnique = /filepath\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(createSql)
+        if (hasFilenameUnique && !hasFilepathUnique) {
+          console.log('正在迁移数据库 v1 → v2：UNIQUE 约束从 filename 移至 filepath...')
+
+          // 删重：同名同路径只保留最早记录
+          db.run('DELETE FROM games WHERE id NOT IN (SELECT MIN(id) FROM games GROUP BY filepath)')
+
+          db.run(`
+            CREATE TABLE games_new (
+              id          INTEGER PRIMARY KEY AUTOINCREMENT,
+              filename    TEXT NOT NULL,
+              filepath    TEXT NOT NULL UNIQUE,
+              name        TEXT NOT NULL,
+              category    TEXT DEFAULT '未分类',
+              tags        TEXT DEFAULT '未分类',
+              size        INTEGER DEFAULT 0,
+              md5         TEXT DEFAULT '',
+              active      INTEGER DEFAULT 1,
+              created_at  TEXT DEFAULT (datetime('now', 'localtime')),
+              updated_at  TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+          `)
+          db.run('INSERT OR IGNORE INTO games_new SELECT * FROM games')
+          db.run('DROP TABLE games')
+          db.run('ALTER TABLE games_new RENAME TO games')
+          // 重建索引
+          db.run('CREATE INDEX IF NOT EXISTS idx_games_name ON games(name)')
+          db.run('CREATE INDEX IF NOT EXISTS idx_games_category ON games(category)')
+          db.run('CREATE INDEX IF NOT EXISTS idx_games_active ON games(active)')
+          db.run('CREATE INDEX IF NOT EXISTS idx_games_created ON games(created_at)')
+          console.log('数据库迁移完成 ✓')
+        }
+      }
+    }
+  } catch (e) {
+    console.log('数据库迁移跳过:', e.message)
+  }
+
   db.run(`
     CREATE TABLE IF NOT EXISTS categories (
       id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,6 +221,15 @@ export function execute(sql, params = []) {
 }
 
 /**
+ * 执行写操作但不自动保存（用于批量写入场景，最后手动 saveDb）
+ */
+export function executeWithoutSave(sql, params = []) {
+  if (!db) throw new Error('数据库未初始化')
+  db.run(sql, params)
+  return { changes: db.getRowsModified() }
+}
+
+/**
  * 获取数据库实例（用于高级操作）
  */
 export function getDb() {
@@ -182,4 +237,4 @@ export function getDb() {
   return db
 }
 
-export default { initDb, saveDb, queryAll, queryOne, execute, getDb, isSetupComplete, getSetting, setSetting }
+export default { initDb, saveDb, queryAll, queryOne, execute, executeWithoutSave, getDb, isSetupComplete, getSetting, setSetting }

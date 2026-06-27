@@ -10,7 +10,7 @@
         <el-button
           :icon="showFavs ? StarFilled : Star"
           circle
-          @click="showFavs = !showFavs"
+          @click="toggleFavs"
           :type="showFavs ? 'warning' : 'default'"
         />
         <el-button :icon="Moon" circle @click="toggleTheme" />
@@ -45,12 +45,12 @@
         />
       </el-select>
       <el-select v-model="sortBy" class="sort-select" @change="onSearch">
-        <el-option label="默认排序" value="default" />
+        <el-option label="最近添加" value="id_desc" />
         <el-option label="名称 A-Z" value="name_asc" />
         <el-option label="名称 Z-A" value="name_desc" />
         <el-option label="文件大小 ↓" value="size_desc" />
         <el-option label="文件大小 ↑" value="size_asc" />
-        <el-option label="最近添加" value="date_desc" />
+        <el-option label="创建时间" value="date_desc" />
       </el-select>
     </div>
 
@@ -74,13 +74,15 @@
     </div>
 
     <!-- 分页 -->
-    <div class="pagination" v-if="totalPages > 1">
+    <div class="pagination" v-if="showTotal > pageSize">
       <el-pagination
         v-model:current-page="currentPage"
-        :page-size="pageSize"
-        :total="totalCount"
-        layout="prev, pager, next"
+        v-model:page-size="pageSize"
+        :page-sizes="[30, 50, 100]"
+        :total="showTotal"
+        layout="total, sizes, prev, pager, next"
         @current-change="onPageChange"
+        @size-change="onSizeChange"
       />
     </div>
 
@@ -137,62 +139,60 @@ const settingsStore = useSettingsStore()
 
 const keyword = ref('')
 const selectedCategory = ref('')
-const sortBy = ref('default')
+const sortBy = ref('id_desc')
 const showFavs = ref(false)
 const showSettings = ref(false)
 const currentPage = ref(1)
-const pageSize = 24
+const pageSize = ref(30)
 
-// 排序后的游戏列表
-const sortedGames = computed(() => {
-  let list = [...store.games]
-  switch (sortBy.value) {
-    case 'name_asc': list.sort((a, b) => (a.name || '').localeCompare(b.name || '')); break
-    case 'name_desc': list.sort((a, b) => (b.name || '').localeCompare(a.name || '')); break
-    case 'size_desc': list.sort((a, b) => (b.size || 0) - (a.size || 0)); break
-    case 'size_asc': list.sort((a, b) => (a.size || 0) - (b.size || 0)); break
-    case 'date_desc': list.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)); break
-  }
-  return list
-})
+// 展示列表和总数（全部走服务端）
+const displayGames = computed(() => store.games)
+const showTotal = computed(() => store.total)
 
-// 仅显示收藏
-const favFiltered = computed(() => {
-  if (!showFavs.value) return sortedGames.value
-  return sortedGames.value.filter(g => store.isFavorite(g.id))
-})
-
-// 分页
-const totalCount = computed(() => favFiltered.value.length)
-const totalPages = computed(() => Math.ceil(totalCount.value / pageSize))
-const displayGames = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  return favFiltered.value.slice(start, start + pageSize)
-})
-
+// 统一的服务端查询
 let searchTimer = null
-function onSearch() {
-  currentPage.value = 1
+function doFetch(extra = {}) {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => {
-    store.fetchGames({
-      keyword: keyword.value,
-      category: selectedCategory.value,
-    })
+    const params = { page: currentPage.value, limit: pageSize.value, sort: sortBy.value, ...extra }
+    if (keyword.value) params.keyword = keyword.value
+    if (selectedCategory.value) params.category = selectedCategory.value
+    if (showFavs.value) {
+      if (!store.favorites.length) { store.games = []; store.total = 0; return }
+      params.ids = store.favorites.join(',')
+    }
+    store.fetchGames(params)
   }, 300)
 }
 
+function onSearch() {
+  currentPage.value = 1
+  doFetch()
+}
+
 function onPageChange() {
+  doFetch()
   window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function onSizeChange() {
+  currentPage.value = 1
+  doFetch()
+}
+
+function toggleFavs() {
+  showFavs.value = !showFavs.value
+  currentPage.value = 1
+  doFetch()
 }
 
 function resetFilters() {
   keyword.value = ''
   selectedCategory.value = ''
-  sortBy.value = 'default'
+  sortBy.value = 'id_desc'
   showFavs.value = false
   currentPage.value = 1
-  store.fetchGames()
+  doFetch()
 }
 
 function toggleTheme() {
@@ -200,7 +200,9 @@ function toggleTheme() {
 }
 
 onMounted(() => {
-  store.initHome()
+  store.fetchGames({ page: 1, limit: pageSize.value })
+  store.fetchCategories()
+  store.fetchStats()
 })
 </script>
 
